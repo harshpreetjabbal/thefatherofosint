@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Search Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+        .container {
+            max-width: 900px;
+            margin: 20px auto;
+            background-color: white;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        header h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 25px;
+        }
+        #searchForm {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        #searchInput {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        #limitInput {
+            width: 100px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        #searchButton {
+            padding: 10px 20px;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #searchButton:hover {
+            background-color: #0056b3;
+        }
+        .loader {
+            display: none;
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #errorContainer {
+            background-color: #ffdddd;
+            color: #d8000c;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .results-section {
+            margin-top: 30px;
+        }
+        .db-result {
+            background-color: #f9f9f9;
+            border: 1px solid #eee;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .db-result h3 {
+            margin-top: 0;
+            color: #0056b3;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 5px;
+        }
+        .db-result p {
+            margin: 5px 0;
+            word-break: break-all;
+        }
+        .db-result strong {
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Data Search Engine 🔎</h1>
+    </header>
+
+    <form id="searchForm">
+        <input type="text" id="searchInput" placeholder="Enter query (e.g., email, name...)" required>
+        <input type="number" id="limitInput" value="100" min="10" max="10000" title="Search limit">
+        <button type="submit" id="searchButton">Search</button>
+    </form>
+
+    <div id="loader" class="loader"></div>
+    <div id="errorContainer" style="display: none;"></div>
+    <div id="resultsContainer" class="results-section"></div>
+</div>
+
+<script>
+    const searchForm = document.getElementById('searchForm');
+    const searchInput = document.getElementById('searchInput');
+    const limitInput = document.getElementById('limitInput');
+    const searchButton = document.getElementById('searchButton');
+    const loader = document.getElementById('loader');
+    const resultsContainer = document.getElementById('resultsContainer');
+    const errorContainer = document.getElementById('errorContainer');
+
+    // आपकी दी गई API की यहाँ सेट की गई है
+    const API_TOKEN = "7631831168:tkkC9AEs";
+    const API_URL = 'https://leakosintapi.com/';
+
+    searchForm.addEventListener('submit', async function(event) {
+        event.preventDefault(); // Prevent default form submission
+
+        const query = searchInput.value.trim();
+        if (!query) {
+            showError("Please enter a search query.");
+            return;
+        }
+
+        // Clear previous results and show loader
+        resultsContainer.innerHTML = '';
+        errorContainer.style.display = 'none';
+        loader.style.display = 'block';
+        searchButton.disabled = true;
+
+        const requestData = {
+            "token": API_TOKEN,
+            "request": query,
+            "limit": parseInt(limitInput.value, 10),
+            "lang": "en",
+            "type": "json"
+        };
+
+        try {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestData)
+            });
+
+            const data = await response.json();
+
+            if (data["Error code"]) {
+                showError(data["Error code"]);
+            } else if (data["List"]) {
+                displayResults(data["List"]);
+            } else {
+                showError("An unknown error occurred. The response format was not recognized.");
+            }
+
+        } catch (error) {
+            showError("Failed to connect to the API. Please check your internet connection.");
+            console.error("Fetch Error:", error);
+        } finally {
+            // Hide loader and re-enable button
+            loader.style.display = 'none';
+            searchButton.disabled = false;
+        }
+    });
+
+    function displayResults(results) {
+        if (Object.keys(results).length === 0 || results["No results found"]) {
+            resultsContainer.innerHTML = '<p>No results found for your query.</p>';
+            return;
+        }
+
+        for (const dbName in results) {
+            const dbData = results[dbName];
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'db-result';
+
+            let innerHTML = `<h3>${dbName}</h3>`;
+            
+            if(dbData.InfoLeak) {
+                innerHTML += `<p><em>${dbData.InfoLeak}</em></p>`;
+            }
+
+            if (dbData.Data && dbData.Data.length > 0) {
+                dbData.Data.forEach(item => {
+                    innerHTML += '<hr style="border: 0; border-top: 1px solid #eee;">';
+                    for (const key in item) {
+                        innerHTML += `<p><strong>${key}:</strong> ${item[key]}</p>`;
+                    }
+                });
+            }
+            resultDiv.innerHTML = innerHTML;
+            resultsContainer.appendChild(resultDiv);
+        }
+    }
+
+    function showError(message) {
+        errorContainer.textContent = `Error: ${message}`;
+        errorContainer.style.display = 'block';
+    }
+
+</script>
+
+</body>
+</html>
