@@ -4,33 +4,29 @@ from random import randint
 import math
 import sqlite3
 from datetime import datetime, timedelta
+import pandas as pd
+import os
 
 try:
     import telebot
-    from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+    from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
 except ModuleNotFoundError:
-    input("Required library not found. Please run the command: pip install pyTelegramBotApi")
+    input("Required library not found. Please run: pip install pyTelegramBotApi pandas openpyxl")
 
-# ===== कॉन्फ़िगरेशन =====
-ADMIN_USER_ID = 7631831168  # <<<--- अपनी असली टेलीग्राम यूजर ID यहाँ डालें
-bot_token = "8202732453:AAHQBZjGwfq4OzwaaaHYWX-55HWfOFrWR1o"
-api_token = "8012849407:uXByp3Cn"
+# ===== CONFIGURATION =====
+ADMIN_USER_ID = 7631831168  # <<<--- Replace with your actual Telegram User ID
+bot_token = "8202732453:AAHQBZjGwfq4OzwaaaHYWX-55HWfOFrWR1o" # Replace with your bot token
+api_token = "8012849407:uXByp3Cn" # Replace with your Leakosint API token
 limit = 300
-UPI_ID = "9540730341@jio"  # <-- आपकी अपडेटेड UPI ID
+UPI_ID = "9540730341@jio"
 DB_FILE = "bot_database.db"
 url = "https://leakosintapi.com/"
+SUPPORT_USERNAME = "harshpreetjabbal"
 
-# करेंसी कनवर्ट करने के लिए रेट
 USD_TO_INR_RATE = 83.50
+PLAN_PRICES_USD = { "daily": 0.50, "weekly": 2.00, "monthly": 3.00 }
 
-# प्लान की कीमतें USD में
-PLAN_PRICES_USD = {
-    "daily": 0.50,
-    "weekly": 2.00,
-    "monthly": 3.00
-}
-
-# ===== डेटाबेस सेटअप =====
+# ===== DATABASE SETUP =====
 def setup_database():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     cursor = conn.cursor()
@@ -49,7 +45,7 @@ def setup_database():
     conn.commit()
     conn.close()
 
-# ===== डेटाबेस के हेल्पर फंक्शन्स =====
+# ===== DATABASE HELPER FUNCTIONS =====
 def get_user(user_id):
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -57,7 +53,8 @@ def get_user(user_id):
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     user = cursor.fetchone()
     if not user:
-        cursor.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
+        free_trial_end_date = (datetime.now() + timedelta(days=7)).isoformat()
+        cursor.execute("INSERT INTO users (user_id, subscription_end) VALUES (?, ?)", (user_id, free_trial_end_date))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         user = cursor.fetchone()
@@ -80,7 +77,7 @@ def purchase_plan(user_id, plan_type):
     new_balance_usd = current_balance_usd - price_usd
     now = datetime.now()
     if plan_type == "daily": end_date = now + timedelta(days=1)
-    elif plan_type == "weekly": end_date = now + timedelta(weeks=1)
+    elif plan_type == "weekly": end_date = now + timedelta(weeks=7)
     elif plan_type == "monthly": end_date = now + timedelta(days=30)
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     cursor = conn.cursor()
@@ -96,19 +93,15 @@ def set_user_currency(user_id, currency):
     conn.commit()
     conn.close()
 
-# ===== एक्सेस कण्ट्रोल फंक्शन =====
+# ===== ACCESS CONTROL FUNCTION =====
 def user_has_active_subscription(user_id):
-    if user_id == ADMIN_USER_ID:
-        return True
+    if user_id == ADMIN_USER_ID: return True
     user = get_user(user_id)
-    sub_end_str = user['subscription_end']
-    if sub_end_str:
-        sub_end_date = datetime.fromisoformat(sub_end_str)
-        if sub_end_date > datetime.now():
-            return True
-    return False
+    if not user['subscription_end']: return False
+    sub_end_date = datetime.fromisoformat(user['subscription_end'])
+    return sub_end_date > datetime.now()
 
-# ===== रिपोर्ट और कीबोर्ड फंक्शन्स =====
+# ===== REPORT & KEYBOARD FUNCTIONS =====
 cash_reports = {}
 user_languages = {}
 def generate_report(query, query_id, user_id):
@@ -152,7 +145,33 @@ def create_inline_keyboard(query_id, page_id, count_page):
 
 bot = telebot.TeleBot(bot_token)
 
-# ===== बॉट कमांड्स =====
+# ===== MAIN MENU KEYBOARD =====
+main_menu_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+main_menu_keyboard.row(KeyboardButton("🔍 Search"), KeyboardButton("📋 Menu"))
+main_menu_keyboard.row(KeyboardButton("💳 Payment"), KeyboardButton("🛍️ Shop"), KeyboardButton("💰 Wallet"))
+
+# ===== BOT COMMAND HANDLERS =====
+
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+    get_user(message.from_user.id)
+    welcome_text = "Hello! I am a Telegram bot that can search databases."
+    bot.reply_to(message, welcome_text, reply_markup=main_menu_keyboard)
+
+@bot.message_handler(commands=['menu'])
+def show_main_menu(message):
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 1
+    markup.add(
+        InlineKeyboardButton("🗓️ Subscription Validity", callback_data="menu_subscription"),
+        InlineKeyboardButton("💰 Wallet Balance", callback_data="menu_wallet"),
+        InlineKeyboardButton("💳 Payment Options", callback_data="menu_payment"),
+        InlineKeyboardButton("🛍️ Shop", callback_data="menu_shop"),
+        InlineKeyboardButton("💱 Change Currency", callback_data="menu_currency"),
+        InlineKeyboardButton("🛠️ Technical Support", url=f"https://t.me/{SUPPORT_USERNAME}")
+    )
+    bot.send_message(message.chat.id, "Here is the main menu:", reply_markup=markup)
+
 @bot.message_handler(commands=['wallet'])
 def show_wallet(message):
     user = get_user(message.from_user.id)
@@ -168,6 +187,51 @@ def show_wallet(message):
         if sub_end_date > datetime.now():
             sub_status = f"Active until {sub_end_date.strftime('%Y-%m-%d %H:%M')}"
     bot.reply_to(message, f"💰 **Your Wallet**\n\n<b>Balance:</b> {balance_display}\n<b>Subscription:</b> {sub_status}", parse_mode="html")
+
+@bot.message_handler(commands=['shop'])
+def show_shop(message):
+    user = get_user(message.from_user.id)
+    currency = user['currency']
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 1
+    for plan, price_usd in PLAN_PRICES_USD.items():
+        if currency == 'INR':
+            price_display = f"₹{(price_usd * USD_TO_INR_RATE):.2f} INR"
+        else:
+            price_display = f"${price_usd:.2f} USD"
+        plan_name = f"▫️ {plan.capitalize()} Plan - {price_display}"
+        markup.add(InlineKeyboardButton(plan_name, callback_data=f"shop_{plan}"))
+    bot.send_message(message.chat.id, "Welcome to the Shop! Purchase a plan using your wallet balance:", reply_markup=markup)
+
+@bot.message_handler(commands=['payment'])
+def show_payment(message):
+    payment_text = (f"You can make payments using UPI.\n\n"
+                    f"Our UPI ID is: `{UPI_ID}`\n\n"
+                    f"After payment, use this command to submit your UTR (Transaction ID):\n"
+                    f"`/submit_utr 123456789012`\n\n"
+                    f"(Replace 123456789012 with your actual UTR number)")
+    bot.send_message(message.chat.id, payment_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['export_data'])
+def export_data_command(message):
+    if message.from_user.id != ADMIN_USER_ID:
+        bot.reply_to(message, "❌ This is an admin-only command.")
+        return
+    bot.reply_to(message, "⏳ Generating user data report... Please wait.")
+    excel_filename = f"user_data_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        df = pd.read_sql_query("SELECT * FROM users", conn)
+        conn.close()
+        df.to_excel(excel_filename, index=False)
+        with open(excel_filename, 'rb') as doc:
+            bot.send_document(ADMIN_USER_ID, doc, caption="Here is the user data report.")
+    except Exception as e:
+        print(f"Error exporting data: {e}")
+        bot.send_message(ADMIN_USER_ID, f"An error occurred while generating the report: {e}")
+    finally:
+        if os.path.exists(excel_filename):
+            os.remove(excel_filename)
 
 @bot.message_handler(commands=['approve'])
 def approve_payment(message):
@@ -211,30 +275,6 @@ def submit_utr(message):
     except IndexError:
         bot.reply_to(message, "❌ Incorrect format. Use: `/submit_utr 123456789012`", parse_mode="Markdown")
 
-@bot.message_handler(commands=['shop'])
-def show_shop(message):
-    user = get_user(message.from_user.id)
-    currency = user['currency']
-    markup = InlineKeyboardMarkup()
-    markup.row_width = 1
-    for plan, price_usd in PLAN_PRICES_USD.items():
-        if currency == 'INR':
-            price_display = f"₹{(price_usd * USD_TO_INR_RATE):.2f} INR"
-        else:
-            price_display = f"${price_usd:.2f} USD"
-        plan_name = f"🗓️ {plan.capitalize()} Plan - {price_display}"
-        markup.add(InlineKeyboardButton(plan_name, callback_data=f"shop_{plan}"))
-    bot.send_message(message.chat.id, "Welcome to the Shop! Purchase a plan using your wallet balance:", reply_markup=markup)
-
-@bot.message_handler(commands=['payment'])
-def show_payment(message):
-    payment_text = (f"आप UPI का उपयोग करके पेमेंट कर सकते हैं।\n\n"
-                    f"हमारी UPI ID है: `{UPI_ID}`\n\n"
-                    f"पेमेंट करने के बाद, अपना UTR (Transaction ID) नंबर सबमिट करने के लिए इस कमांड का उपयोग करें:\n"
-                    f"`/submit_utr 123456789012`\n\n"
-                    f"(123456789012 की जगह अपना असली UTR नंबर डालें)")
-    bot.send_message(message.chat.id, payment_text, parse_mode="Markdown")
-
 @bot.message_handler(commands=['language'])
 def select_language(message):
     markup = InlineKeyboardMarkup()
@@ -243,16 +283,42 @@ def select_language(message):
         InlineKeyboardButton("English 🇬🇧", callback_data="set_lang_en"),
         InlineKeyboardButton("Русский 🇷🇺", callback_data="set_lang_ru")
     )
-    bot.send_message(message.chat.id, "Please select your preferred language:", reply_markup=markup)
+    bot.send_message(message.chat.id, "Please select your preferred search result language:", reply_markup=markup)
 
-@bot.message_handler(commands=["start"])
-def send_welcome(message):
-    get_user(message.from_user.id)
-    bot.reply_to(message, "Hello! I am a Telegram bot that can search databases.\n\nUse /wallet to check your balance and /shop to purchase a plan.", parse_mode="Markdown")
+@bot.message_handler(commands=['currency'])
+def change_currency(message):
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 2
+    markup.add(
+        InlineKeyboardButton("₹ Indian Rupee (INR)", callback_data="set_currency_INR"),
+        InlineKeyboardButton("$ US Dollar (USD)", callback_data="set_currency_USD")
+    )
+    bot.send_message(message.chat.id, "Please select your display currency:", reply_markup=markup)
 
+# ===== MAIN MESSAGE HANDLER =====
 @bot.message_handler(func=lambda message: True)
-def echo_message(message):
-    if message.text.startswith('/'): return
+def main_message_handler(message):
+    user_id = message.from_user.id
+    text = message.text
+    # Handle Reply Keyboard button presses
+    if text == "🔍 Search":
+        msg = bot.reply_to(message, "Please enter what you want to search for:")
+        bot.register_next_step_handler(msg, process_search_query)
+    elif text == "📋 Menu":
+        show_main_menu(message)
+    elif text == "💳 Payment":
+        show_payment(message)
+    elif text == "🛍️ Shop":
+        show_shop(message)
+    elif text == "💰 Wallet":
+        show_wallet(message)
+    elif text.startswith('/'):
+        bot.reply_to(message, "Unknown command. Please use the buttons or the /menu command.")
+    else:
+        # If user types something random, assume it's a search
+        process_search_query(message)
+
+def process_search_query(message):
     user_id = message.from_user.id
     if not user_has_active_subscription(user_id):
         bot.reply_to(message, "❌ You do not have an active subscription.\nPlease use the /shop command to purchase a plan.")
@@ -260,7 +326,7 @@ def echo_message(message):
     query_id = randint(0, 9999999)
     report = generate_report(message.text, query_id, user_id)
     if report is None or not report:
-        bot.reply_to(message, "No results found or the bot is not working.", parse_mode="Markdown")
+        bot.reply_to(message, "No results were found or the bot is not working at the moment.", parse_mode="Markdown")
         return
     markup = create_inline_keyboard(query_id, 0, len(report))
     try:
@@ -269,19 +335,21 @@ def echo_message(message):
         print(f"Telegram API Error: {e}")
         bot.send_message(message.chat.id, text=report[0].replace("<b>", "").replace("</b>", ""), reply_markup=markup)
 
+# ===== CALLBACK QUERY HANDLER =====
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call: CallbackQuery):
     global cash_reports, user_languages
     data = call.data
     if data.startswith("/page "):
-        query_id, page_id_str = call.data.split(" ")[1:]
+        # Logic for paginating through search results
+        query_id, page_id_str = data.split(" ")[1:]
         page_id = int(page_id_str)
         if query_id not in cash_reports:
             bot.answer_callback_query(call.id, "Request expired.", show_alert=True)
         else:
             report = cash_reports[query_id]
             markup = create_inline_keyboard(query_id, page_id, len(report))
-            current_page_index = page_id if 0 <= page_id < len(report) else 0
+            current_page_index = page_id % len(report)
             try:
                 bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=report[current_page_index], parse_mode="html", reply_markup=markup)
             except telebot.apihelper.ApiTelegramException as e:
@@ -304,10 +372,8 @@ def callback_query(call: CallbackQuery):
         user = get_user(call.from_user.id)
         currency = user['currency']
         if success:
-            if currency == 'INR':
-                new_balance_display = f"₹{(new_balance_usd * USD_TO_INR_RATE):.2f} INR"
-            else:
-                new_balance_display = f"${new_balance_usd:.2f} USD"
+            if currency == 'INR': new_balance_display = f"₹{(new_balance_usd * USD_TO_INR_RATE):.2f} INR"
+            else: new_balance_display = f"${new_balance_usd:.2f} USD"
             bot.send_message(call.message.chat.id, f"✅ Success! You have purchased the {plan} plan.\nYour new wallet balance is {new_balance_display}.")
         else:
             if currency == 'INR':
@@ -317,11 +383,23 @@ def callback_query(call: CallbackQuery):
                 required_display = f"${price_usd:.2f}"
                 balance_display = f"${new_balance_usd:.2f}"
             bot.send_message(call.message.chat.id, f"❌ Insufficient balance.\n<b>Required:</b> {required_display}\n<b>Your Balance:</b> {balance_display}", parse_mode="html")
+    # Handle menu callbacks
+    elif data == "menu_subscription":
+        user = get_user(call.from_user.id)
+        sub_status = "Inactive"
+        if user['subscription_end']:
+            sub_end_date = datetime.fromisoformat(user['subscription_end'])
+            if sub_end_date > datetime.now(): sub_status = f"✅ Active until {sub_end_date.strftime('%Y-%m-%d %H:%M')}"
+        bot.send_message(call.message.chat.id, f"Subscription Status: {sub_status}")
+    elif data == "menu_wallet": show_wallet(call.message)
+    elif data == "menu_payment": show_payment(call.message)
+    elif data == "menu_shop": show_shop(call.message)
+    elif data == "menu_currency": change_currency(call.message)
 
-# ===== बॉट को शुरू करें =====
+# ===== START THE BOT =====
 if __name__ == "__main__":
     setup_database()
-    print("Bot is starting with Database and Subscription System...")
+    print("Bot is starting with all features...")
     while True:
         try:
             bot.polling(none_stop=True)
